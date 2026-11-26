@@ -67,6 +67,9 @@ REXCVAR_DECLARE(uint32_t, ps5_water_reflection_every);
 #endif
 #if REX_PLATFORM_PS4
 REXCVAR_DECLARE(bool, ps4_fast_handoff);
+REXCVAR_DEFINE_BOOL(ps4_skip_direct_index_bind_commands, true, "GPU",
+                    "Capture the index buffer with regular PS4 draws")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 #endif
 REXCVAR_DEFINE_UINT32(gta4_shadow_cascade_count, 0, "GTA IV/Graphics/Shadows",
                       "Directional shadow cascades (0 keeps the stock 5)")
@@ -5718,6 +5721,21 @@ extern "C" void sub_82A3B7B0(PPCContext& ctx, uint8_t* base) {
   const uint32_t slot = device + kIndexBufferOffset;
   RetireNativeBoundResource(base, device, LoadU32(base, slot));
   StoreU32(base, slot, buffer);
+
+#if REX_PLATFORM_PS4
+  // Direct indexed draws capture the buffer from the device slot synchronously.
+  // Display-list replay and trace paths still consume the explicit binding.
+  if (REXCVAR_GET(ps4_skip_direct_index_bind_commands) &&
+      (!g_native_captures_open.load(std::memory_order_relaxed) ||
+       !g_active_native_capture.active) &&
+      !HookDiagnosticsEnabled(rex::diagnostics::Category::kNativeTrace) &&
+      !HookDiagnosticsEnabled(rex::diagnostics::Category::kNativeProfiler) &&
+      !HookDiagnosticsEnabled(rex::diagnostics::Category::kTransition) &&
+      !FireTraceConfig().enabled && !TvTraceConfig().enabled &&
+      !PhoneTraceConfig().enabled && !gta4::gpu_pass::MarkersRequested()) {
+    return;
+  }
+#endif
 
   SetIndexBufferCommand command{};
   command.device = device;

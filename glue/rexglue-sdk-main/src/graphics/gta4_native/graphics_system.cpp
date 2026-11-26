@@ -31509,6 +31509,12 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
   const bool collect_frame_diagnostics =
       legacy_diagnostics || transition_trace || ps4_target_frame_diagnostics;
   const bool transition_notes = transition::IsEnabled();
+  const std::string ps9_stencil_probe = REXCVAR_GET(gta4_native_light_ps9_stencil_probe);
+  const std::string stencil_face_probe = REXCVAR_GET(gta4_native_light_stencil_face_probe);
+  const bool legacy_ps9_bypass = REXCVAR_GET(gta4_native_light_ps9_stencil_bypass);
+  const bool ps9_probe_enabled = ps9_stencil_probe != "original";
+  const bool stencil_face_probe_enabled = stencil_face_probe != "original";
+  const bool phone_lineage = PhoneTraceConfig().lineage;
   uint64_t invocation = 0;
   if (collect_frame_diagnostics) {
     static std::atomic<uint64_t> invocation_counter{0};
@@ -32950,7 +32956,7 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
         if (is_draw(current_frame_[i]) || current_frame_[i].type == CommandType::kClear)
           select(i, "explicit-command-window");
       }
-    } else if (PhoneTraceConfig().lineage) {
+    } else if (phone_lineage) {
       if (PhoneTraceConfig().fade) {
         // Readback selection only; no render state or command ordering changes.
         for (size_t i = 0; i < current_frame_.size(); ++i) {
@@ -33467,7 +33473,7 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
     if ((queued_command.trace_flags & NativeCommand::kTracePhone) || phone_frame_trace_)
       phone_frame_trace_ = queued_command.phone_trace;
     phone_record_event_ = phone_frame_trace_ ? phone_frame_trace_->event : 0;
-    phone_lineage_draw_active_ = PhoneTraceConfig().lineage && phone_probe_commands.contains(command_index);
+    phone_lineage_draw_active_ = phone_lineage && phone_probe_commands.contains(command_index);
     if (queued_command.type == CommandType::kReleaseResource) {
       if (rendering) {
         end_rendering(__LINE__);
@@ -33499,8 +33505,8 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
     const NativeCommand* command_pointer = &queued_command;
     constexpr uint64_t kDeferredLightingPs9Hash = 0x23C88DA6F953E36Bull;
     constexpr uint32_t kFillerVolumePointTechnique = 11;
-    const std::string& ps9_stencil_probe = REXCVAR_GET(gta4_native_light_ps9_stencil_probe);
     const bool ps9_accumulation_draw =
+        (legacy_ps9_bypass || ps9_probe_enabled) &&
         queued_command.light_trace_technique == kFillerVolumePointTechnique &&
         queued_command.light_trace_mode == 0 && queued_command.pipeline_state &&
         queued_command.pipeline_state->vertex_shader_resource &&
@@ -33517,9 +33523,8 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
         ps9_probe_instance = StableDeferredLocalLightInstanceId(*vertex_constants, *constant_base);
       }
     }
-    const bool legacy_ps9_bypass = REXCVAR_GET(gta4_native_light_ps9_stencil_bypass);
     const bool targeted_ps9_probe =
-        ps9_probe_instance == kApartmentBulbX890Instance && ps9_stencil_probe != "original";
+        ps9_probe_enabled && ps9_probe_instance == kApartmentBulbX890Instance;
     if (ps9_accumulation_draw && (legacy_ps9_bypass || targeted_ps9_probe)) {
       light_stencil_bypass_command.emplace(queued_command);
       NativeFixedFunctionState& fixed = light_stencil_bypass_command->fixed_function_state;
@@ -33549,10 +33554,9 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
       }
     }
 
-    const std::string& stencil_face_probe = REXCVAR_GET(gta4_native_light_stencil_face_probe);
     constexpr uint64_t kDeferredLightingVs1Hash = 0xA97B1F043F720396ull;
     uint64_t stencil_face_probe_instance = 0;
-    if (stencil_face_probe != "original" && queued_command.pipeline_state &&
+    if (stencil_face_probe_enabled && queued_command.pipeline_state &&
         queued_command.pipeline_state->vertex_shader_resource &&
         queued_command.pipeline_state->vertex_shader_resource->hash == kDeferredLightingVs1Hash &&
         !queued_command.pipeline_state->pixel_shader_resource && queued_command.shader_state &&
@@ -34243,11 +34247,11 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
                       handoff.destination.height, handoff.destination.sample_type,
                       handoff.trace_caller));
       }
-      if (PhoneTraceConfig().lineage && command.phone_trace)
+      if (phone_lineage && command.phone_trace)
         RecordPhoneHandoffProbe(command_buffer, command, submitted_frame, uint32_t(command_index), 10);
       const bool handoff_recorded =
           RecordDepthSurfaceHandoff(command_buffer, command, submitted_frame);
-      if (PhoneTraceConfig().lineage && command.phone_trace)
+      if (phone_lineage && command.phone_trace)
         RecordPhoneHandoffProbe(command_buffer, command, submitted_frame, uint32_t(command_index), 11);
       if (NativeRendererEventTraceEnabled()) {
       TraceNativeRendererEvent("command-result",
@@ -35440,7 +35444,7 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
     if (phone_probe_selected) {
       if (rendering) { end_rendering(__LINE__); rendering = false; }
       RecordPhoneProbe(command_buffer, command, target, submitted_frame, uint32_t(command_index), 0);
-      if (PhoneTraceConfig().lineage)
+      if (phone_lineage)
         RecordPhoneLineageInputs(command_buffer, command, submitted_frame, uint32_t(command_index));
     }
     if (water_reflection_probe_frame && command_index == water_reflection_clear_index) {
@@ -37311,9 +37315,7 @@ bool Gta4NativeGraphicsSystem::RecordNativeFrame(
       if (!diagnostic_frame && !fire_images_ && !force_content_probe && !diagnostic_variants_enabled &&
           !PhoneTraceConfig().readbacks && !selected_light_stencil_setup_draw && !light_color_delta_draw &&
           !postfx_scheduler.scene_capture_pending() &&
-          !REXCVAR_GET(gta4_native_light_ps9_stencil_bypass) &&
-          REXCVAR_GET(gta4_native_light_ps9_stencil_probe) == "original" &&
-          REXCVAR_GET(gta4_native_light_stencil_face_probe) == "original" &&
+          !legacy_ps9_bypass && !ps9_probe_enabled && !stencil_face_probe_enabled &&
           !CachedDiagnosticsEnabled(rex::diagnostics::Category::kNativeProbes)) {
         producer_depth_resolve = PrepareProducerDepthResolve(
             command_buffer, command_index, target, depth_attachment, stencil_attachment,
