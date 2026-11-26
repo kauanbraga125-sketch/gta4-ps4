@@ -27,7 +27,7 @@ gta4_native_frame_timeline = false
 
 # LXXXV-b: console presets (the PS4 had the desktop ones: draw distance 3x,
 # shadow distance 2x, population 1.25x, SMAA). PS5/Android values, 30 FPS cap.
-gta4_draw_distance_scale = 0.5
+gta4_draw_distance_scale = 0.45
 gta4_shadow_distance_scale = 0.5
 gta4_traffic_density_scale = 0.5
 gta4_parked_car_density_scale = 0.5
